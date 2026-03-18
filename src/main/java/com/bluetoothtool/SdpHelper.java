@@ -263,41 +263,15 @@ public class SdpHelper {
     }
 
     // ── Browse UUID list ──────────────────────────────────────────────────────
-    // A broad set of well-known Bluetooth profile UUIDs. searchServices() with
-    // this list will return any service that matches at least one UUID.
+    // SDP UUID matching checks every UUID anywhere in a service record
+    // (ServiceClassIDList, ProtocolDescriptorList, ProfileDescriptorList).
+    // Searching for the RFCOMM protocol UUID (0x0003) therefore matches any
+    // service that uses RFCOMM — SPP, DUN, OBEX, custom profiles, etc.
+    // Using a single UUID avoids the SDP PDU size limit (~7 UUIDs max per
+    // request on many devices) that causes SERVICE_SEARCH_ERROR.
 
     static final UUID[] BROWSE_UUIDS = {
-        new UUID(0x0001),  // SDP
-        new UUID(0x0003),  // RFCOMM
-        new UUID(0x0100),  // L2CAP
-        new UUID(0x1000),  // ServiceDiscoveryServer
-        new UUID(0x1001),  // BrowseGroupDescriptor
-        new UUID(0x1002),  // PublicBrowseGroup
-        new UUID(0x1101),  // SerialPort (SPP)
-        new UUID(0x1102),  // LANAccessUsingPPP
-        new UUID(0x1103),  // DialupNetworking
-        new UUID(0x1104),  // IrMCSync
-        new UUID(0x1105),  // OBEXObjectPush
-        new UUID(0x1106),  // OBEXFileTransfer
-        new UUID(0x1108),  // Headset
-        new UUID(0x1109),  // CordlessTelephony
-        new UUID(0x110A),  // AudioSource
-        new UUID(0x110B),  // AudioSink
-        new UUID(0x110C),  // A/V_RemoteControlTarget
-        new UUID(0x110D),  // AdvancedAudioDistribution
-        new UUID(0x110E),  // A/V_RemoteControl
-        new UUID(0x1110),  // Intercom
-        new UUID(0x1111),  // Fax
-        new UUID(0x1112),  // HeadsetAudioGateway
-        new UUID(0x1115),  // PANU
-        new UUID(0x1116),  // NAP
-        new UUID(0x1117),  // GN
-        new UUID(0x111E),  // Handsfree
-        new UUID(0x111F),  // HandsfreeAudioGateway
-        new UUID(0x1124),  // HID
-        new UUID(0x112D),  // SIM_Access
-        new UUID(0x1200),  // PnPInformation
-        new UUID(0x1203),  // GenericAudio
+        new UUID(0x0003), // RFCOMM — matches every service using RFCOMM
     };
 
     // ── Exception ─────────────────────────────────────────────────────────────
