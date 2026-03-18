@@ -1,20 +1,18 @@
 package com.bluetoothtool;
 
-import javax.bluetooth.*;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.TitledBorder;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.datatransfer.StringSelection;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BiConsumer;
 
 /**
  * Service Browser tab — queries the SDP records of a selected device.
  */
-public class ServiceBrowserPanel extends JPanel implements DiscoveryListener {
+public class ServiceBrowserPanel extends JPanel {
 
     private final SharedState state;
 
@@ -26,71 +24,6 @@ public class ServiceBrowserPanel extends JPanel implements DiscoveryListener {
 
     // Callback: (url, serviceName) -> open in terminal
     private BiConsumer<String, String> openInTerminalCallback;
-
-    // Inquiry lock for service search
-    private final Object searchLock = new Object();
-    private final List<ServiceRecord> foundRecords = new ArrayList<>();
-    private volatile int searchTransactionId = -1;
-
-    // Common UUIDs to search for
-    private static final UUID[] COMMON_UUIDS = {
-        new UUID(0x0001),  // SDP
-        new UUID(0x0003),  // RFCOMM
-        new UUID(0x000C),  // HTTP
-        new UUID(0x0100),  // L2CAP
-        new UUID(0x0101),  // HIDP
-        new UUID(0x1000),  // ServiceDiscoveryServerServiceClassID
-        new UUID(0x1001),  // BrowseGroupDescriptorServiceClassID
-        new UUID(0x1002),  // PublicBrowseGroup
-        new UUID(0x1101),  // SerialPort (SPP)
-        new UUID(0x1102),  // LANAccessUsingPPP
-        new UUID(0x1103),  // DialupNetworking
-        new UUID(0x1104),  // IrMCSync
-        new UUID(0x1105),  // OBEXObjectPush
-        new UUID(0x1106),  // OBEXFileTransfer
-        new UUID(0x1108),  // Headset
-        new UUID(0x1109),  // CordlessTelephony
-        new UUID(0x110A),  // AudioSource
-        new UUID(0x110B),  // AudioSink
-        new UUID(0x110C),  // A/V_RemoteControlTarget
-        new UUID(0x110D),  // AdvancedAudioDistribution
-        new UUID(0x110E),  // A/V_RemoteControl
-        new UUID(0x110F),  // VideoConferencing
-        new UUID(0x1110),  // Intercom
-        new UUID(0x1111),  // Fax
-        new UUID(0x1112),  // HeadsetAudioGateway
-        new UUID(0x1115),  // PANU
-        new UUID(0x1116),  // NAP
-        new UUID(0x1117),  // GN
-        new UUID(0x1118),  // DirectPrinting
-        new UUID(0x1119),  // ReferencePrinting
-        new UUID(0x111A),  // ImagingResponder
-        new UUID(0x111B),  // ImagingAutomaticArchive
-        new UUID(0x111C),  // ImagingReferencedObjects
-        new UUID(0x111E),  // HandsfreeAudioGateway
-        new UUID(0x111F),  // HidDevice
-        new UUID(0x1120),  // HardcopyCableReplacement
-        new UUID(0x1121),  // HCR_Print
-        new UUID(0x1122),  // HCR_Scan
-        new UUID(0x1124),  // HID
-        new UUID(0x1125),  // HardcopyStatus
-        new UUID(0x1126),  // HardcopyCableReplacementPrint
-        new UUID(0x112D),  // SIM_Access
-        new UUID(0x112F),  // PhonebookAccessPCE
-        new UUID(0x1130),  // PhonebookAccessPSE
-        new UUID(0x1131),  // PhonebookAccess
-        new UUID(0x1132),  // MessageAccessServer
-        new UUID(0x1133),  // MessageNotificationServer
-        new UUID(0x1134),  // MessageAccessProfile
-        new UUID(0x1200),  // PnPInformation
-        new UUID(0x1201),  // GenericNetworking
-        new UUID(0x1202),  // GenericFileTransfer
-        new UUID(0x1203),  // GenericAudio
-        new UUID(0x1204),  // GenericTelephony
-        new UUID(0x1303),  // VideoSource
-        new UUID(0x1304),  // VideoSink
-        new UUID(0x1305),  // VideoDistribution
-    };
 
     public ServiceBrowserPanel(SharedState state) {
         this.state = state;
@@ -192,112 +125,28 @@ public class ServiceBrowserPanel extends JPanel implements DiscoveryListener {
 
         browseButton.setEnabled(false);
         tableModel.setRowCount(0);
-        foundRecords.clear();
-        setStatus("Browsing services on " + target.name + " [" + target.address + "]…", new Color(0, 100, 200));
+        setStatus("Browsing services on " + target.name + "…", new Color(0, 100, 200));
 
         new Thread(() -> {
             try {
-                DiscoveryAgent agent = LocalDevice.getLocalDevice().getDiscoveryAgent();
-                int[] attrSet = {
-                    0x0000, // ServiceRecordHandle
-                    0x0001, // ServiceClassIDList
-                    0x0002, // ServiceRecordState
-                    0x0003, // ServiceID
-                    0x0004, // ProtocolDescriptorList
-                    0x0005, // BrowseGroupList
-                    0x0006, // LanguageBaseAttributeIDList
-                    0x0007, // ServiceInfoTimeToLive
-                    0x0008, // ServiceAvailability
-                    0x0009, // BluetoothProfileDescriptorList
-                    0x000A, // DocumentationURL
-                    0x000B, // ClientExecutableURL
-                    0x000C, // IconURL
-                    0x0100, // ServiceName
-                    0x0101, // ServiceDescription
-                    0x0102, // ProviderName
-                };
-
-                synchronized (searchLock) {
-                    searchTransactionId = agent.searchServices(
-                        attrSet,
-                        COMMON_UUIDS,
-                        target.device,
-                        this
-                    );
-                    searchLock.wait(30_000);
-                }
-
-            } catch (BluetoothStateException e) {
+                List<SdpHelper.ServiceInfo> services = SdpHelper.browseServices(target.device);
+                SwingUtilities.invokeLater(() -> {
+                    for (SdpHelper.ServiceInfo svc : services) {
+                        tableModel.addRow(new Object[]{svc.name, svc.uuid, svc.connectionUrl});
+                    }
+                    int count = services.size();
+                    setStatus(count == 0 ? "No services found." : count + " service(s) found.",
+                              count == 0 ? Color.GRAY : new Color(0, 128, 0));
+                    updateOpenButton();
+                });
+            } catch (SdpHelper.BluetoothException e) {
                 SwingUtilities.invokeLater(() ->
-                    setStatus("Bluetooth error: " + e.getMessage(), Color.RED));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                SwingUtilities.invokeLater(() ->
-                    setStatus("Search interrupted.", Color.GRAY));
+                    setStatus("Browse failed: " + e.getMessage(), Color.RED));
             } finally {
                 SwingUtilities.invokeLater(() -> browseButton.setEnabled(true));
             }
         }, "bt-service-browse").start();
     }
-
-    // ── DiscoveryListener ─────────────────────────────────────────────────────
-
-    @Override
-    public void servicesDiscovered(int transID, ServiceRecord[] records) {
-        for (ServiceRecord sr : records) {
-            foundRecords.add(sr);
-
-            String serviceName = SdpHelper.extractServiceName(sr);
-            String uuid = SdpHelper.extractUUID(sr);
-            String url = sr.getConnectionURL(ServiceRecord.NOAUTHENTICATE_NOENCRYPT, false);
-            if (url == null) url = "";
-
-            final String finalName = serviceName;
-            final String finalUUID = uuid;
-            final String finalUrl = url;
-
-            SwingUtilities.invokeLater(() -> {
-                tableModel.addRow(new Object[]{finalName, finalUUID, finalUrl});
-                setStatus("Found " + tableModel.getRowCount() + " service(s)…", new Color(0, 100, 200));
-            });
-        }
-    }
-
-    @Override
-    public void serviceSearchCompleted(int transID, int respCode) {
-        String msg;
-        Color color;
-        if (respCode == DiscoveryListener.SERVICE_SEARCH_COMPLETED) {
-            int count = tableModel.getRowCount();
-            msg = count == 0 ? "No services found." : count + " service(s) found.";
-            color = count == 0 ? Color.GRAY : new Color(0, 128, 0);
-        } else if (respCode == DiscoveryListener.SERVICE_SEARCH_TERMINATED) {
-            msg = "Search terminated.";
-            color = Color.GRAY;
-        } else if (respCode == DiscoveryListener.SERVICE_SEARCH_ERROR) {
-            msg = "Search error.";
-            color = Color.RED;
-        } else if (respCode == DiscoveryListener.SERVICE_SEARCH_NO_RECORDS) {
-            msg = "No service records found.";
-            color = Color.GRAY;
-        } else if (respCode == DiscoveryListener.SERVICE_SEARCH_DEVICE_NOT_REACHABLE) {
-            msg = "Device not reachable.";
-            color = Color.RED;
-        } else {
-            msg = "Search complete (code=" + respCode + ").";
-            color = Color.GRAY;
-        }
-        SwingUtilities.invokeLater(() -> setStatus(msg, color));
-        synchronized (searchLock) {
-            searchLock.notifyAll();
-        }
-    }
-
-    @Override
-    public void deviceDiscovered(RemoteDevice btDevice, DeviceClass cod) {}
-
-    @Override
-    public void inquiryCompleted(int discType) {}
 
     // ── Open in Terminal ──────────────────────────────────────────────────────
 
