@@ -14,6 +14,7 @@ public class BluetoothConnection {
     private BufferedReader reader;
     private PrintWriter writer;
     private InputStream rawInputStream;
+    private OutputStream rawOutputStream;
     private volatile boolean open = false;
     private Thread readerThread;
 
@@ -22,10 +23,10 @@ public class BluetoothConnection {
      */
     public void open(String url) throws IOException {
         streamConnection = (StreamConnection) Connector.open(url);
-        rawInputStream = streamConnection.openInputStream();
-        OutputStream os = streamConnection.openOutputStream();
+        rawInputStream    = streamConnection.openInputStream();
+        rawOutputStream   = streamConnection.openOutputStream();
         reader = new BufferedReader(new InputStreamReader(rawInputStream, "UTF-8"));
-        writer = new PrintWriter(new OutputStreamWriter(os, "UTF-8"), true);
+        writer = new PrintWriter(new OutputStreamWriter(rawOutputStream, "UTF-8"), true);
         open = true;
     }
 
@@ -34,10 +35,10 @@ public class BluetoothConnection {
      */
     public void open(StreamConnection existingConnection) throws IOException {
         streamConnection = existingConnection;
-        rawInputStream = streamConnection.openInputStream();
-        OutputStream os = streamConnection.openOutputStream();
+        rawInputStream    = streamConnection.openInputStream();
+        rawOutputStream   = streamConnection.openOutputStream();
         reader = new BufferedReader(new InputStreamReader(rawInputStream, "UTF-8"));
-        writer = new PrintWriter(new OutputStreamWriter(os, "UTF-8"), true);
+        writer = new PrintWriter(new OutputStreamWriter(rawOutputStream, "UTF-8"), true);
         open = true;
     }
 
@@ -52,9 +53,11 @@ public class BluetoothConnection {
         }
         try { if (reader != null) reader.close(); } catch (IOException ignored) {}
         try { if (writer != null) writer.close(); } catch (Exception ignored) {}
+        try { if (rawOutputStream != null) rawOutputStream.close(); } catch (IOException ignored) {}
         try { if (streamConnection != null) streamConnection.close(); } catch (IOException ignored) {}
         reader = null;
         writer = null;
+        rawOutputStream = null;
         streamConnection = null;
     }
 
@@ -71,10 +74,9 @@ public class BluetoothConnection {
      * Send raw bytes.
      */
     public void sendBytes(byte[] bytes) throws IOException {
-        if (streamConnection != null && open) {
-            OutputStream os = streamConnection.openOutputStream();
-            os.write(bytes);
-            os.flush();
+        if (rawOutputStream != null && open) {
+            rawOutputStream.write(bytes);
+            rawOutputStream.flush();
         }
     }
 
