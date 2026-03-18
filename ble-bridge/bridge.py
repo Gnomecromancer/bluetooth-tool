@@ -36,6 +36,25 @@ Client → Bridge  (HID commands):
   {"cmd": "hid_write",      "hex": "00FF01"}
   {"cmd": "hid_close"}
 
+Client → Bridge  (Emulator commands):
+  {"cmd": "emu_key_press",         "key": "enter"}
+  {"cmd": "emu_key_type",          "text": "hello", "interval": 0.05}
+  {"cmd": "emu_key_down",          "key": "shift"}
+  {"cmd": "emu_key_up",            "key": "shift"}
+  {"cmd": "emu_key_hotkey",        "keys": ["ctrl","shift","s"]}
+  {"cmd": "emu_mouse_move",        "x": 100, "y": 200, "relative": false, "duration": 0.0}
+  {"cmd": "emu_mouse_click",       "button": "left", "double": false}
+  {"cmd": "emu_mouse_down",        "button": "left"}
+  {"cmd": "emu_mouse_up",          "button": "left"}
+  {"cmd": "emu_mouse_scroll",      "dx": 0, "dy": 3}
+  {"cmd": "emu_gamepad_connect",   "type": "xbox360"}
+  {"cmd": "emu_gamepad_button",    "button": "A", "pressed": true}
+  {"cmd": "emu_gamepad_left_stick","x": 0.5, "y": -0.5}
+  {"cmd": "emu_gamepad_right_stick","x": 0.0, "y": 0.0}
+  {"cmd": "emu_gamepad_trigger",   "side": "left", "value": 0.8}
+  {"cmd": "emu_gamepad_update"}
+  {"cmd": "emu_gamepad_disconnect"}
+
 Bridge → Client  (events):
   {"event": "ready",        "version": "1.0"}
 
@@ -65,6 +84,11 @@ Bridge → Client  (events):
   {"event": "hid_input",    "hex": "...", "bytes": [...], "len": 64}
   {"event": "hid_closed"}
   {"event": "hid_error",    "message": "..."}
+
+  Emulator events:
+  {"event": "emu_ok",       "cmd": "emu_key_press"}
+  {"event": "emu_gamepad_connected",    "type": "xbox360"}
+  {"event": "emu_gamepad_disconnected"}
 """
 
 import asyncio
@@ -90,6 +114,25 @@ try:
 except ImportError:
     HID_AVAILABLE = False
     print("[bridge] hid (hidapi) not installed — HID commands disabled", flush=True)
+
+try:
+    import pyautogui
+    pyautogui.FAILSAFE = False
+    HAS_PYAUTOGUI = True
+except ImportError:
+    HAS_PYAUTOGUI = False
+
+try:
+    import keyboard as kb_lib
+    HAS_KEYBOARD = True
+except ImportError:
+    HAS_KEYBOARD = False
+
+try:
+    import vgamepad as vg
+    HAS_VGAMEPAD = True
+except ImportError:
+    HAS_VGAMEPAD = False
 
 PORT = 7878
 
@@ -126,6 +169,8 @@ class Session:
         # HID
         self.hid_device   = None
         self.hid_read_task = None
+        # Emulator
+        self.emu_gamepad  = None
 
     async def emit(self, obj):
         try:
@@ -171,6 +216,24 @@ class Session:
             elif cmd == "hid_stop_read": await self.hid_stop_read()
             elif cmd == "hid_write":     await self.hid_write(msg["hex"])
             elif cmd == "hid_close":     await self.hid_close()
+            # ---- Emulator ---------------------------------------------------
+            elif cmd == "emu_key_press":          await self.emu_key_press(msg["key"])
+            elif cmd == "emu_key_type":           await self.emu_key_type(msg["text"], float(msg.get("interval", 0.0)))
+            elif cmd == "emu_key_down":           await self.emu_key_down(msg["key"])
+            elif cmd == "emu_key_up":             await self.emu_key_up(msg["key"])
+            elif cmd == "emu_key_hotkey":         await self.emu_key_hotkey(msg["keys"])
+            elif cmd == "emu_mouse_move":         await self.emu_mouse_move(int(msg["x"]), int(msg["y"]), bool(msg.get("relative", False)), float(msg.get("duration", 0.0)))
+            elif cmd == "emu_mouse_click":        await self.emu_mouse_click(msg.get("button", "left"), bool(msg.get("double", False)))
+            elif cmd == "emu_mouse_down":         await self.emu_mouse_down(msg.get("button", "left"))
+            elif cmd == "emu_mouse_up":           await self.emu_mouse_up(msg.get("button", "left"))
+            elif cmd == "emu_mouse_scroll":       await self.emu_mouse_scroll(int(msg.get("dx", 0)), int(msg.get("dy", 0)))
+            elif cmd == "emu_gamepad_connect":    await self.emu_gamepad_connect(msg.get("type", "xbox360"))
+            elif cmd == "emu_gamepad_button":     await self.emu_gamepad_button(msg["button"], bool(msg["pressed"]))
+            elif cmd == "emu_gamepad_left_stick": await self.emu_gamepad_left_stick(float(msg["x"]), float(msg["y"]))
+            elif cmd == "emu_gamepad_right_stick":await self.emu_gamepad_right_stick(float(msg["x"]), float(msg["y"]))
+            elif cmd == "emu_gamepad_trigger":    await self.emu_gamepad_trigger(msg["side"], float(msg["value"]))
+            elif cmd == "emu_gamepad_update":     await self.emu_gamepad_update()
+            elif cmd == "emu_gamepad_disconnect": await self.emu_gamepad_disconnect()
             else:
                 await self.emit({"event": "error", "message": f"Unknown command: {cmd}"})
         except KeyError as e:
@@ -580,6 +643,203 @@ class Session:
             self.hid_device = None
             await self.emit({"event": "hid_closed"})
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # Emulator (pyautogui / vgamepad)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _require_pyautogui(self):
+        if not HAS_PYAUTOGUI:
+            raise RuntimeError("pyautogui is not installed — install pyautogui")
+
+    async def emu_key_press(self, key: str):
+        self._require_pyautogui()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: pyautogui.press(key))
+        await self.emit({"event": "emu_ok", "cmd": "emu_key_press"})
+
+    async def emu_key_type(self, text: str, interval: float = 0.0):
+        self._require_pyautogui()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: pyautogui.typewrite(text, interval=interval))
+        await self.emit({"event": "emu_ok", "cmd": "emu_key_type"})
+
+    async def emu_key_down(self, key: str):
+        self._require_pyautogui()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: pyautogui.keyDown(key))
+        await self.emit({"event": "emu_ok", "cmd": "emu_key_down"})
+
+    async def emu_key_up(self, key: str):
+        self._require_pyautogui()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: pyautogui.keyUp(key))
+        await self.emit({"event": "emu_ok", "cmd": "emu_key_up"})
+
+    async def emu_key_hotkey(self, keys: list):
+        self._require_pyautogui()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: pyautogui.hotkey(*keys))
+        await self.emit({"event": "emu_ok", "cmd": "emu_key_hotkey"})
+
+    async def emu_mouse_move(self, x: int, y: int, relative: bool = False, duration: float = 0.0):
+        self._require_pyautogui()
+        loop = asyncio.get_event_loop()
+
+        if relative:
+            await loop.run_in_executor(None, lambda: pyautogui.moveRel(x, y, duration=duration))
+        else:
+            await loop.run_in_executor(None, lambda: pyautogui.moveTo(x, y, duration=duration))
+
+        pos = pyautogui.position()
+        await self.emit({"event": "emu_ok", "cmd": "emu_mouse_move", "x": pos.x, "y": pos.y})
+
+    async def emu_mouse_click(self, button: str = "left", double: bool = False):
+        self._require_pyautogui()
+        loop = asyncio.get_event_loop()
+        if double:
+            await loop.run_in_executor(None, lambda: pyautogui.doubleClick(button=button))
+        else:
+            await loop.run_in_executor(None, lambda: pyautogui.click(button=button))
+        await self.emit({"event": "emu_ok", "cmd": "emu_mouse_click"})
+
+    async def emu_mouse_down(self, button: str = "left"):
+        self._require_pyautogui()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: pyautogui.mouseDown(button=button))
+        await self.emit({"event": "emu_ok", "cmd": "emu_mouse_down"})
+
+    async def emu_mouse_up(self, button: str = "left"):
+        self._require_pyautogui()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: pyautogui.mouseUp(button=button))
+        await self.emit({"event": "emu_ok", "cmd": "emu_mouse_up"})
+
+    async def emu_mouse_scroll(self, dx: int = 0, dy: int = 0):
+        self._require_pyautogui()
+        loop = asyncio.get_event_loop()
+        if dy != 0:
+            await loop.run_in_executor(None, lambda: pyautogui.scroll(dy))
+        if dx != 0:
+            await loop.run_in_executor(None, lambda: pyautogui.hscroll(dx))
+        await self.emit({"event": "emu_ok", "cmd": "emu_mouse_scroll"})
+
+    async def emu_gamepad_connect(self, type: str = "xbox360"):
+        if not HAS_VGAMEPAD:
+            await self.emit({"event": "error", "message": "vgamepad not installed — install vgamepad and ViGEmBus driver"})
+            return
+        if self.emu_gamepad is not None:
+            self.emu_gamepad = None
+        if type == "ds4":
+            self.emu_gamepad = vg.VDS4Gamepad()
+        else:
+            self.emu_gamepad = vg.VX360Gamepad()
+        self.emu_gamepad.update()
+        await self.emit({"event": "emu_gamepad_connected", "type": type})
+
+    async def emu_gamepad_button(self, button: str, pressed: bool):
+        if self.emu_gamepad is None:
+            await self.emit({"event": "error", "message": "No gamepad connected"})
+            return
+
+        xbox_map = {
+            "A":          vg.XUSB_BUTTON.XUSB_GAMEPAD_A,
+            "B":          vg.XUSB_BUTTON.XUSB_GAMEPAD_B,
+            "X":          vg.XUSB_BUTTON.XUSB_GAMEPAD_X,
+            "Y":          vg.XUSB_BUTTON.XUSB_GAMEPAD_Y,
+            "LB":         vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,
+            "RB":         vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,
+            "START":      vg.XUSB_BUTTON.XUSB_GAMEPAD_START,
+            "BACK":       vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK,
+            "LS":         vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB,
+            "RS":         vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB,
+            "DPAD_UP":    vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP,
+            "DPAD_DOWN":  vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN,
+            "DPAD_LEFT":  vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT,
+            "DPAD_RIGHT": vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT,
+        }
+
+        if isinstance(self.emu_gamepad, vg.VX360Gamepad):
+            btn_const = xbox_map.get(button.upper())
+            if btn_const is None:
+                await self.emit({"event": "error", "message": f"Unknown Xbox button: {button}"})
+                return
+            if pressed:
+                self.emu_gamepad.press_button(button=btn_const)
+            else:
+                self.emu_gamepad.release_button(button=btn_const)
+        else:
+            # DS4 — map common names to DS4 equivalents where possible
+            ds4_map = {
+                "A":          vg.DS4_BUTTONS.DS4_BUTTON_CROSS,
+                "B":          vg.DS4_BUTTONS.DS4_BUTTON_CIRCLE,
+                "X":          vg.DS4_BUTTONS.DS4_BUTTON_SQUARE,
+                "Y":          vg.DS4_BUTTONS.DS4_BUTTON_TRIANGLE,
+                "LB":         vg.DS4_BUTTONS.DS4_BUTTON_SHOULDER_LEFT,
+                "RB":         vg.DS4_BUTTONS.DS4_BUTTON_SHOULDER_RIGHT,
+                "START":      vg.DS4_BUTTONS.DS4_BUTTON_OPTIONS,
+                "BACK":       vg.DS4_BUTTONS.DS4_BUTTON_SHARE,
+                "LS":         vg.DS4_BUTTONS.DS4_BUTTON_THUMB_LEFT,
+                "RS":         vg.DS4_BUTTONS.DS4_BUTTON_THUMB_RIGHT,
+            }
+            ds4_dpad_map = {
+                "DPAD_UP":    vg.DS4_DPAD_DIRECTIONS.DS4_BUTTON_DPAD_NORTH,
+                "DPAD_DOWN":  vg.DS4_DPAD_DIRECTIONS.DS4_BUTTON_DPAD_SOUTH,
+                "DPAD_LEFT":  vg.DS4_DPAD_DIRECTIONS.DS4_BUTTON_DPAD_WEST,
+                "DPAD_RIGHT": vg.DS4_DPAD_DIRECTIONS.DS4_BUTTON_DPAD_EAST,
+            }
+            btn_upper = button.upper()
+            if btn_upper in ds4_dpad_map:
+                if pressed:
+                    self.emu_gamepad.directional_pad(direction=ds4_dpad_map[btn_upper])
+                else:
+                    self.emu_gamepad.directional_pad(direction=vg.DS4_DPAD_DIRECTIONS.DS4_BUTTON_DPAD_NONE)
+            else:
+                btn_const = ds4_map.get(btn_upper)
+                if btn_const is None:
+                    await self.emit({"event": "error", "message": f"Unknown DS4 button: {button}"})
+                    return
+                if pressed:
+                    self.emu_gamepad.press_button(button=btn_const)
+                else:
+                    self.emu_gamepad.release_button(button=btn_const)
+
+        await self.emit({"event": "emu_ok", "cmd": "emu_gamepad_button"})
+
+    async def emu_gamepad_left_stick(self, x: float, y: float):
+        if self.emu_gamepad is None:
+            await self.emit({"event": "error", "message": "No gamepad connected"})
+            return
+        self.emu_gamepad.left_joystick_float(x_value_float=x, y_value_float=y)
+        await self.emit({"event": "emu_ok", "cmd": "emu_gamepad_left_stick"})
+
+    async def emu_gamepad_right_stick(self, x: float, y: float):
+        if self.emu_gamepad is None:
+            await self.emit({"event": "error", "message": "No gamepad connected"})
+            return
+        self.emu_gamepad.right_joystick_float(x_value_float=x, y_value_float=y)
+        await self.emit({"event": "emu_ok", "cmd": "emu_gamepad_right_stick"})
+
+    async def emu_gamepad_trigger(self, side: str, value: float):
+        if self.emu_gamepad is None:
+            await self.emit({"event": "error", "message": "No gamepad connected"})
+            return
+        if side == "left":
+            self.emu_gamepad.left_trigger_float(value_float=value)
+        else:
+            self.emu_gamepad.right_trigger_float(value_float=value)
+        await self.emit({"event": "emu_ok", "cmd": "emu_gamepad_trigger"})
+
+    async def emu_gamepad_update(self):
+        if self.emu_gamepad is None:
+            await self.emit({"event": "error", "message": "No gamepad connected"})
+            return
+        self.emu_gamepad.update()
+        await self.emit({"event": "emu_ok", "cmd": "emu_gamepad_update"})
+
+    async def emu_gamepad_disconnect(self):
+        self.emu_gamepad = None
+        await self.emit({"event": "emu_gamepad_disconnected"})
+
     # ── Cleanup ───────────────────────────────────────────────────────────────
 
     async def cleanup(self):
@@ -614,6 +874,10 @@ class Session:
                 pass
             self.hid_device = None
 
+        # Emulator
+        if self.emu_gamepad is not None:
+            self.emu_gamepad = None
+
 
 # ── WebSocket handler ─────────────────────────────────────────────────────────
 
@@ -635,7 +899,7 @@ async def handler(ws):
 
 async def main():
     print(f"[bridge] Bridge starting on ws://127.0.0.1:{PORT}", flush=True)
-    print(f"[bridge] BLE: enabled  |  Classic BT: {'enabled' if BT_AVAILABLE else 'disabled (pybluez2 missing)'}  |  HID: {'enabled' if HID_AVAILABLE else 'disabled (hid missing)'}", flush=True)
+    print(f"[bridge] BLE: enabled  |  Classic BT: {'enabled' if BT_AVAILABLE else 'disabled (pybluez2 missing)'}  |  HID: {'enabled' if HID_AVAILABLE else 'disabled (hid missing)'}  |  Emulator: {'enabled' if HAS_PYAUTOGUI else 'disabled (pyautogui missing)'}  |  Gamepad: {'enabled' if HAS_VGAMEPAD else 'disabled (vgamepad missing)'}", flush=True)
     async with websockets.serve(handler, "127.0.0.1", PORT):
         print(f"[bridge] Ready", flush=True)
         await asyncio.Future()  # run forever

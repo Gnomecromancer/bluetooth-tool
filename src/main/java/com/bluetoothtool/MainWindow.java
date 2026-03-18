@@ -27,6 +27,7 @@ public class MainWindow extends JFrame {
     private BlePanel           blePanel;
     private ClassicBtPanel     classicBtPanel;
     private HidPanel           hidPanel;
+    private EmulatorPanel      emulatorPanel;
     private BleBridgeManager   bleBridge;
     private JTabbedPane        tabs;
 
@@ -72,6 +73,7 @@ public class MainWindow extends JFrame {
         blePanel       = new BlePanel(bleBridge);
         classicBtPanel = new ClassicBtPanel(bleBridge);
         hidPanel       = new HidPanel(bleBridge);
+        emulatorPanel  = new EmulatorPanel(bleBridge);
         bleBridge.start();
 
         tabs = new JTabbedPane(JTabbedPane.TOP);
@@ -108,6 +110,10 @@ public class MainWindow extends JFrame {
         // Tab 8 — HID
         tabs.addTab("HID", iconFor("FileView.hardDriveIcon"), hidPanel,
                 "HID device explorer — read input reports, write output reports");
+
+        // Tab 9 — Emulator
+        tabs.addTab("Emulator", iconFor("OptionPane.warningIcon"), emulatorPanel,
+                "Emulate keyboard, mouse, and gamepad inputs");
 
         add(tabs, BorderLayout.CENTER);
 
