@@ -207,9 +207,10 @@ public class SdpHelper {
             while (en.hasMoreElements()) {
                 Object elem = en.nextElement();
                 if (elem instanceof DataElement de && de.getDataType() == DataElement.UUID) {
-                    String known = resolveKnownUUID((UUID) de.getValue());
+                    UUID uuid = (UUID) de.getValue();
+                    String known = resolveKnownUUID(uuid);
                     if (known != null) return known;
-                    return "Service";
+                    return uuid.toString(); // show raw UUID when unrecognised
                 }
             }
         }
