@@ -1,6 +1,7 @@
 package com.bluetoothtool;
 
 import javax.bluetooth.LocalDevice;
+import javax.bluetooth.UUID;
 import javax.microedition.io.Connector;
 import javax.microedition.io.StreamConnection;
 import javax.microedition.io.StreamConnectionNotifier;
@@ -20,6 +21,7 @@ import java.util.List;
 public class TerminalPanel extends JPanel {
 
     private static final String SPP_UUID = "0000110100001000800000805F9B34FB";
+    private static final UUID   SPP_UUID_OBJ  = new UUID(0x1101); // used for SDP lookup
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     // Colors
@@ -342,14 +344,20 @@ public class TerminalPanel extends JPanel {
         }
 
         connectButton.setEnabled(false);
-        setStatus("Connecting…", Color.ORANGE);
-        appendSystem("[Client] Connecting to " + rawAddr + " via SPP…");
+        setStatus("Looking up SPP service…", Color.ORANGE);
+        appendSystem("[Client] Looking up SPP service on " + rawAddr + "…");
 
-        String url = "btspp://" + rawAddr + ":" + SPP_UUID
-                + ";authenticate=false;encrypt=false;master=false";
-
+        final String finalAddr = rawAddr;
         new Thread(() -> {
             try {
+                // SDP lookup: get a URL with the correct numeric RFCOMM channel
+                String url = (selected != null)
+                        ? SdpHelper.lookupConnectionUrl(selected.device, SPP_UUID_OBJ)
+                        : SdpHelper.lookupConnectionUrl(finalAddr, SPP_UUID_OBJ);
+
+                SwingUtilities.invokeLater(() ->
+                    appendSystem("[Client] Connecting via " + url + "…"));
+
                 connection.open(url);
                 SwingUtilities.invokeLater(() -> {
                     setConnectedUI(true);
@@ -366,6 +374,12 @@ public class TerminalPanel extends JPanel {
                     })
                 );
 
+            } catch (SdpHelper.BluetoothException e) {
+                SwingUtilities.invokeLater(() -> {
+                    connectButton.setEnabled(true);
+                    setStatus("SDP lookup failed: " + e.getMessage(), Color.RED);
+                    appendError("[Client] SDP: " + e.getMessage());
+                });
             } catch (IOException e) {
                 SwingUtilities.invokeLater(() -> {
                     connectButton.setEnabled(true);

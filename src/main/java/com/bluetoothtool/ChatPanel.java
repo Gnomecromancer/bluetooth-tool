@@ -1,5 +1,6 @@
 package com.bluetoothtool;
 
+import javax.bluetooth.UUID;
 import javax.microedition.io.Connector;
 import javax.microedition.io.StreamConnection;
 import javax.microedition.io.StreamConnectionNotifier;
@@ -16,8 +17,9 @@ import java.util.List;
  */
 public class ChatPanel extends JPanel {
 
-    private static final String CHAT_UUID = "27012F0C5B8E4B4E9B3A6B9D0E3A4F5A";
-    private static final String SERVICE_NAME = "BTChat";
+    private static final String CHAT_UUID     = "27012F0C5B8E4B4E9B3A6B9D0E3A4F5A";
+    private static final UUID   CHAT_UUID_OBJ = new UUID(CHAT_UUID, false);
+    private static final String SERVICE_NAME  = "BTChat";
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     // Bubble colors
@@ -236,15 +238,14 @@ public class ChatPanel extends JPanel {
         }
 
         connectButton.setEnabled(false);
-        setStatus("Connecting to " + selected.name + "…", Color.ORANGE);
-        addSystemMessage("Connecting to " + selected.name + "…");
-
-        String rawAddr = selected.device.getBluetoothAddress().toUpperCase();
-        String url = "btspp://" + rawAddr + ":" + CHAT_UUID
-                + ";authenticate=false;encrypt=false;master=false";
+        setStatus("Looking up chat service on " + selected.name + "…", Color.ORANGE);
+        addSystemMessage("Looking up chat service on " + selected.name + "…");
 
         new Thread(() -> {
             try {
+                String url = SdpHelper.lookupConnectionUrl(selected.device, CHAT_UUID_OBJ);
+                SwingUtilities.invokeLater(() ->
+                    addSystemMessage("Connecting via " + url + "…"));
                 connection.open(url);
                 SwingUtilities.invokeLater(() -> {
                     setConnectedUI(true);
@@ -252,6 +253,12 @@ public class ChatPanel extends JPanel {
                     addSystemMessage("Connected to " + selected.name + ".");
                 });
                 startReading(selected.name);
+            } catch (SdpHelper.BluetoothException e) {
+                SwingUtilities.invokeLater(() -> {
+                    connectButton.setEnabled(true);
+                    setStatus("SDP failed: " + e.getMessage(), Color.RED);
+                    addSystemMessage("SDP lookup failed: " + e.getMessage());
+                });
             } catch (IOException e) {
                 SwingUtilities.invokeLater(() -> {
                     connectButton.setEnabled(true);
