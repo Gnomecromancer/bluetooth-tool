@@ -25,6 +25,8 @@ public class MainWindow extends JFrame {
     private ServiceBrowserPanel serviceBrowserPanel;
     private LocalInfoPanel     localInfoPanel;
     private BlePanel           blePanel;
+    private ClassicBtPanel     classicBtPanel;
+    private HidPanel           hidPanel;
     private BleBridgeManager   bleBridge;
     private JTabbedPane        tabs;
 
@@ -66,8 +68,10 @@ public class MainWindow extends JFrame {
 
         // BLE bridge — resolve script path relative to the jar/working dir
         String bridgeScript = resolveBridgeScript();
-        bleBridge = new BleBridgeManager(bridgeScript);
-        blePanel  = new BlePanel(bleBridge);
+        bleBridge      = new BleBridgeManager(bridgeScript);
+        blePanel       = new BlePanel(bleBridge);
+        classicBtPanel = new ClassicBtPanel(bleBridge);
+        hidPanel       = new HidPanel(bleBridge);
         bleBridge.start();
 
         tabs = new JTabbedPane(JTabbedPane.TOP);
@@ -96,6 +100,14 @@ public class MainWindow extends JFrame {
         // Tab 6 — BLE
         tabs.addTab("BLE", iconFor("FileView.floppyDriveIcon"), blePanel,
                 "BLE scanner and GATT explorer (via Python bridge)");
+
+        // Tab 7 — Classic BT (bridge)
+        tabs.addTab("Classic", iconFor("FileView.computerIcon"), classicBtPanel,
+                "Bluetooth Classic scanner + RFCOMM terminal (via Python bridge)");
+
+        // Tab 8 — HID
+        tabs.addTab("HID", iconFor("FileView.hardDriveIcon"), hidPanel,
+                "HID device explorer — read input reports, write output reports");
 
         add(tabs, BorderLayout.CENTER);
 
