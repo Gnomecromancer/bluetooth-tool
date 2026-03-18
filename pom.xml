@@ -23,6 +23,20 @@
             <artifactId>bluecove</artifactId>
             <version>2.1.1</version>
         </dependency>
+
+        <!-- WebSocket client — used to talk to the BLE bridge subprocess -->
+        <dependency>
+            <groupId>org.java-websocket</groupId>
+            <artifactId>Java-WebSocket</artifactId>
+            <version>1.5.4</version>
+        </dependency>
+
+        <!-- JSON — lightweight, no extra deps -->
+        <dependency>
+            <groupId>org.json</groupId>
+            <artifactId>json</artifactId>
+            <version>20240303</version>
+        </dependency>
     </dependencies>
 
     <build>
