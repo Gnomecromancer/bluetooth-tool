@@ -26,6 +26,7 @@ public class MainWindow extends JFrame {
     private LocalInfoPanel     localInfoPanel;
     private BlePanel           blePanel;
     private BleBridgeManager   bleBridge;
+    private JTabbedPane        tabs;
 
     public MainWindow() {
         super("Bluetooth Tool Suite");
@@ -57,13 +58,19 @@ public class MainWindow extends JFrame {
         serviceBrowserPanel = new ServiceBrowserPanel(state);
         localInfoPanel      = new LocalInfoPanel();
 
+        // Wire Service Browser → Terminal: "Open in Terminal" button
+        serviceBrowserPanel.setOpenInTerminalCallback((url, name) -> {
+            tabs.setSelectedComponent(terminalPanel);
+            terminalPanel.connectWithUrl(url, name);
+        });
+
         // BLE bridge — resolve script path relative to the jar/working dir
         String bridgeScript = resolveBridgeScript();
         bleBridge = new BleBridgeManager(bridgeScript);
         blePanel  = new BlePanel(bleBridge);
         bleBridge.start();
 
-        JTabbedPane tabs = new JTabbedPane(JTabbedPane.TOP);
+        tabs = new JTabbedPane(JTabbedPane.TOP);
         tabs.setBorder(new EmptyBorder(4, 4, 4, 4));
 
         // Tab 1 — Devices (Scanner)

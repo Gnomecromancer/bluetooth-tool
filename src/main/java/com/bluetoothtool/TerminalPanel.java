@@ -1,7 +1,6 @@
 package com.bluetoothtool;
 
 import javax.bluetooth.LocalDevice;
-import javax.bluetooth.UUID;
 import javax.microedition.io.Connector;
 import javax.microedition.io.StreamConnection;
 import javax.microedition.io.StreamConnectionNotifier;
@@ -13,6 +12,7 @@ import java.awt.*;
 import java.io.IOException;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -20,8 +20,7 @@ import java.util.List;
  */
 public class TerminalPanel extends JPanel {
 
-    private static final String SPP_UUID = "0000110100001000800000805F9B34FB";
-    private static final UUID   SPP_UUID_OBJ  = new UUID(0x1101); // used for SDP lookup
+    private static final String SPP_UUID = "0000110100001000800000805F9B34FB"; // server registration
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     // Colors
@@ -139,10 +138,10 @@ public class TerminalPanel extends JPanel {
 
         clientPanel.add(new JLabel("Device:"));
         clientPanel.add(deviceCombo);
-        clientPanel.add(new JLabel("  or address:"));
+        clientPanel.add(new JLabel("  or direct URL:"));
 
-        manualAddressField = new JTextField(14);
-        manualAddressField.setToolTipText("Manual Bluetooth address, e.g. 00:11:22:33:44:55");
+        manualAddressField = new JTextField(22);
+        manualAddressField.setToolTipText("Direct btspp:// URL (advanced) — leave blank to browse services");
         clientPanel.add(manualAddressField);
 
         topPanel.add(clientPanel, BorderLayout.CENTER);
@@ -327,44 +326,99 @@ public class TerminalPanel extends JPanel {
     }
 
     private void startClient() {
-        String targetAddress = manualAddressField.getText().trim();
+        String directUrl = manualAddressField.getText().trim();
         SharedState.DeviceEntry selected = (SharedState.DeviceEntry) deviceCombo.getSelectedItem();
 
-        if (targetAddress.isEmpty() && selected == null) {
-            JOptionPane.showMessageDialog(this, "Select a device or enter a manual address.", "No Target", JOptionPane.WARNING_MESSAGE);
+        // Direct URL path — user pasted a btspp:// URL
+        if (!directUrl.isEmpty()) {
+            connectWithUrl(directUrl, "direct URL");
             return;
         }
 
-        // Build raw address from selected device if no manual address
-        String rawAddr;
-        if (!targetAddress.isEmpty()) {
-            rawAddr = targetAddress.replace(":", "").replace("-", "").toUpperCase();
-        } else {
-            rawAddr = selected.device.getBluetoothAddress().toUpperCase();
+        if (selected == null) {
+            JOptionPane.showMessageDialog(this,
+                "Select a device from the list, or paste a direct btspp:// URL.",
+                "No Target", JOptionPane.WARNING_MESSAGE);
+            return;
         }
 
+        // Browse-and-pick path — discover services on the selected device
         connectButton.setEnabled(false);
-        setStatus("Looking up SPP service…", Color.ORANGE);
-        appendSystem("[Client] Looking up SPP service on " + rawAddr + "…");
+        setStatus("Browsing services on " + selected.name + "…", Color.ORANGE);
+        appendSystem("[Client] Browsing services on " + selected.name + "…");
 
-        final String finalAddr = rawAddr;
         new Thread(() -> {
             try {
-                // SDP lookup: get a URL with the correct numeric RFCOMM channel
-                String url = (selected != null)
-                        ? SdpHelper.lookupConnectionUrl(selected.device, SPP_UUID_OBJ)
-                        : SdpHelper.lookupConnectionUrl(finalAddr, SPP_UUID_OBJ);
+                List<SdpHelper.ServiceInfo> services =
+                        SdpHelper.browseServices(selected.device);
 
-                SwingUtilities.invokeLater(() ->
-                    appendSystem("[Client] Connecting via " + url + "…"));
+                List<SdpHelper.ServiceInfo> connectable = new ArrayList<>();
+                for (SdpHelper.ServiceInfo s : services) {
+                    if (s.isConnectable()) connectable.add(s);
+                }
 
+                if (connectable.isEmpty()) {
+                    SwingUtilities.invokeLater(() -> {
+                        connectButton.setEnabled(true);
+                        setStatus("No connectable services found", Color.RED);
+                        appendError("[Client] No RFCOMM services found on " + selected.name
+                            + ". Found " + services.size() + " total service(s) — "
+                            + "check the Service Browser tab for details.");
+                    });
+                    return;
+                }
+
+                if (connectable.size() == 1) {
+                    // Only one option — connect directly
+                    SdpHelper.ServiceInfo svc = connectable.get(0);
+                    SwingUtilities.invokeLater(() ->
+                        connectWithUrl(svc.connectionUrl, svc.name));
+                } else {
+                    // Multiple — show picker on EDT
+                    SdpHelper.ServiceInfo[] arr =
+                            connectable.toArray(new SdpHelper.ServiceInfo[0]);
+                    SwingUtilities.invokeLater(() -> {
+                        connectButton.setEnabled(true);
+                        SdpHelper.ServiceInfo chosen = (SdpHelper.ServiceInfo)
+                            JOptionPane.showInputDialog(
+                                TerminalPanel.this,
+                                "Found " + connectable.size() + " connectable services.\n"
+                                    + "Select one to open in the terminal:",
+                                "Select Service",
+                                JOptionPane.QUESTION_MESSAGE,
+                                null, arr, arr[0]);
+                        if (chosen != null)
+                            connectWithUrl(chosen.connectionUrl, chosen.name);
+                    });
+                }
+
+            } catch (SdpHelper.BluetoothException e) {
+                SwingUtilities.invokeLater(() -> {
+                    connectButton.setEnabled(true);
+                    setStatus("Browse failed: " + e.getMessage(), Color.RED);
+                    appendError("[Client] Browse: " + e.getMessage());
+                });
+            }
+        }, "bt-terminal-client").start();
+    }
+
+    /**
+     * Connect using a known btspp:// URL — called from Service Browser tab or
+     * internally after service selection.
+     */
+    public void connectWithUrl(String url, String label) {
+        connectButton.setEnabled(false);
+        setStatus("Connecting to " + label + "…", Color.ORANGE);
+        appendSystem("[Client] Connecting via " + url + "…");
+
+        new Thread(() -> {
+            try {
                 connection.open(url);
                 SwingUtilities.invokeLater(() -> {
                     setConnectedUI(true);
-                    setStatus("Connected (client mode)", new Color(0, 128, 0));
-                    appendSystem("[Client] Connected.");
+                    setStatus("Connected — " + label, new Color(0, 128, 0));
+                    appendSystem("[Client] Connected to " + label + ".");
                 });
-
                 connection.startReading(
                     line -> appendReceived(line),
                     hexModeToggle.isSelected() ? bytes -> appendReceivedBytes(bytes) : null,
@@ -373,13 +427,6 @@ public class TerminalPanel extends JPanel {
                         appendSystem("[Client] Connection closed.");
                     })
                 );
-
-            } catch (SdpHelper.BluetoothException e) {
-                SwingUtilities.invokeLater(() -> {
-                    connectButton.setEnabled(true);
-                    setStatus("SDP lookup failed: " + e.getMessage(), Color.RED);
-                    appendError("[Client] SDP: " + e.getMessage());
-                });
             } catch (IOException e) {
                 SwingUtilities.invokeLater(() -> {
                     connectButton.setEnabled(true);
@@ -387,7 +434,7 @@ public class TerminalPanel extends JPanel {
                     appendError("[Client] " + e.getMessage());
                 });
             }
-        }, "bt-terminal-client").start();
+        }, "bt-terminal-connect").start();
     }
 
     // ── Send ──────────────────────────────────────────────────────────────────

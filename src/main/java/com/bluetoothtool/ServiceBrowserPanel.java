@@ -7,9 +7,9 @@ import javax.swing.border.TitledBorder;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.datatransfer.StringSelection;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 /**
  * Service Browser tab — queries the SDP records of a selected device.
@@ -19,9 +19,13 @@ public class ServiceBrowserPanel extends JPanel implements DiscoveryListener {
     private final SharedState state;
 
     private JButton browseButton;
+    private JButton openInTerminalBtn;
     private JLabel statusLabel;
     private DefaultTableModel tableModel;
     private JTable serviceTable;
+
+    // Callback: (url, serviceName) -> open in terminal
+    private BiConsumer<String, String> openInTerminalCallback;
 
     // Inquiry lock for service search
     private final Object searchLock = new Object();
@@ -95,6 +99,11 @@ public class ServiceBrowserPanel extends JPanel implements DiscoveryListener {
         buildUI();
     }
 
+    /** Wire up the "Open in Terminal" button. Call this from MainWindow after all panels are created. */
+    public void setOpenInTerminalCallback(BiConsumer<String, String> callback) {
+        this.openInTerminalCallback = callback;
+    }
+
     private void buildUI() {
         // ── Table ─────────────────────────────────────────────────────────────
         tableModel = new DefaultTableModel(new String[]{"Service Name", "UUID", "Connection URL"}, 0) {
@@ -129,6 +138,11 @@ public class ServiceBrowserPanel extends JPanel implements DiscoveryListener {
             }
         });
 
+        // Enable "Open in Terminal" when a row with a non-empty URL is selected
+        serviceTable.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) updateOpenButton();
+        });
+
         JScrollPane scrollPane = new JScrollPane(serviceTable);
         scrollPane.setBorder(new TitledBorder("Services  (double-click a row to copy URL)"));
         add(scrollPane, BorderLayout.CENTER);
@@ -145,13 +159,20 @@ public class ServiceBrowserPanel extends JPanel implements DiscoveryListener {
         browseButton = new JButton("Browse Selected Device");
         browseButton.addActionListener(e -> startBrowse());
 
+        openInTerminalBtn = new JButton("Open in Terminal");
+        openInTerminalBtn.setEnabled(false);
+        openInTerminalBtn.setToolTipText("Connect to selected service in the Terminal tab");
+        openInTerminalBtn.addActionListener(e -> openSelectedInTerminal());
+
         JButton clearBtn = new JButton("Clear");
         clearBtn.addActionListener(e -> {
             tableModel.setRowCount(0);
             setStatus("Table cleared.", Color.GRAY);
+            updateOpenButton();
         });
 
         btnRow.add(browseButton);
+        btnRow.add(openInTerminalBtn);
         btnRow.add(clearBtn);
         bottomPanel.add(btnRow, BorderLayout.WEST);
         bottomPanel.add(statusLabel, BorderLayout.EAST);
@@ -226,8 +247,8 @@ public class ServiceBrowserPanel extends JPanel implements DiscoveryListener {
         for (ServiceRecord sr : records) {
             foundRecords.add(sr);
 
-            String serviceName = extractServiceName(sr);
-            String uuid = extractUUID(sr);
+            String serviceName = SdpHelper.extractServiceName(sr);
+            String uuid = SdpHelper.extractUUID(sr);
             String url = sr.getConnectionURL(ServiceRecord.NOAUTHENTICATE_NOENCRYPT, false);
             if (url == null) url = "";
 
@@ -246,32 +267,25 @@ public class ServiceBrowserPanel extends JPanel implements DiscoveryListener {
     public void serviceSearchCompleted(int transID, int respCode) {
         String msg;
         Color color;
-        switch (respCode) {
-            case DiscoveryListener.SERVICE_SEARCH_COMPLETED -> {
-                int count = tableModel.getRowCount();
-                msg = count == 0 ? "No services found." : count + " service(s) found.";
-                color = count == 0 ? Color.GRAY : new Color(0, 128, 0);
-            }
-            case DiscoveryListener.SERVICE_SEARCH_TERMINATED -> {
-                msg = "Search terminated.";
-                color = Color.GRAY;
-            }
-            case DiscoveryListener.SERVICE_SEARCH_ERROR -> {
-                msg = "Search error.";
-                color = Color.RED;
-            }
-            case DiscoveryListener.SERVICE_SEARCH_NO_RECORDS -> {
-                msg = "No service records found.";
-                color = Color.GRAY;
-            }
-            case DiscoveryListener.SERVICE_SEARCH_DEVICE_NOT_REACHABLE -> {
-                msg = "Device not reachable.";
-                color = Color.RED;
-            }
-            default -> {
-                msg = "Search complete (code=" + respCode + ").";
-                color = Color.GRAY;
-            }
+        if (respCode == DiscoveryListener.SERVICE_SEARCH_COMPLETED) {
+            int count = tableModel.getRowCount();
+            msg = count == 0 ? "No services found." : count + " service(s) found.";
+            color = count == 0 ? Color.GRAY : new Color(0, 128, 0);
+        } else if (respCode == DiscoveryListener.SERVICE_SEARCH_TERMINATED) {
+            msg = "Search terminated.";
+            color = Color.GRAY;
+        } else if (respCode == DiscoveryListener.SERVICE_SEARCH_ERROR) {
+            msg = "Search error.";
+            color = Color.RED;
+        } else if (respCode == DiscoveryListener.SERVICE_SEARCH_NO_RECORDS) {
+            msg = "No service records found.";
+            color = Color.GRAY;
+        } else if (respCode == DiscoveryListener.SERVICE_SEARCH_DEVICE_NOT_REACHABLE) {
+            msg = "Device not reachable.";
+            color = Color.RED;
+        } else {
+            msg = "Search complete (code=" + respCode + ").";
+            color = Color.GRAY;
         }
         SwingUtilities.invokeLater(() -> setStatus(msg, color));
         synchronized (searchLock) {
@@ -280,77 +294,32 @@ public class ServiceBrowserPanel extends JPanel implements DiscoveryListener {
     }
 
     @Override
-    public void deviceDiscovered(RemoteDevice btDevice, DeviceClass cod) {
-        // Not used here
-    }
+    public void deviceDiscovered(RemoteDevice btDevice, DeviceClass cod) {}
 
     @Override
-    public void inquiryCompleted(int discType) {
-        // Not used here
+    public void inquiryCompleted(int discType) {}
+
+    // ── Open in Terminal ──────────────────────────────────────────────────────
+
+    private void updateOpenButton() {
+        if (openInTerminalBtn == null) return;
+        int row = serviceTable.getSelectedRow();
+        if (row < 0) { openInTerminalBtn.setEnabled(false); return; }
+        String url = (String) tableModel.getValueAt(row, 2);
+        openInTerminalBtn.setEnabled(openInTerminalCallback != null
+                && url != null && !url.isEmpty());
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private String extractServiceName(ServiceRecord sr) {
-        // Attribute 0x0100 is the ServiceName (language-offset + base 0x0100)
-        DataElement nameAttr = sr.getAttributeValue(0x0100);
-        if (nameAttr != null && nameAttr.getDataType() == DataElement.STRING) {
-            return (String) nameAttr.getValue();
-        }
-        // Try to identify by service class UUID
-        DataElement classList = sr.getAttributeValue(0x0001); // ServiceClassIDList
-        if (classList != null && classList.getDataType() == DataElement.DATSEQ) {
-            java.util.Enumeration<?> en = (java.util.Enumeration<?>) classList.getValue();
-            while (en.hasMoreElements()) {
-                Object elem = en.nextElement();
-                if (elem instanceof DataElement de && de.getDataType() == DataElement.UUID) {
-                    UUID uuid = (UUID) de.getValue();
-                    String known = resolveKnownUUID(uuid);
-                    if (known != null) return known;
-                    return "Service";
-                }
-            }
-        }
-        return "(unnamed)";
+    private void openSelectedInTerminal() {
+        int row = serviceTable.getSelectedRow();
+        if (row < 0 || openInTerminalCallback == null) return;
+        String url  = (String) tableModel.getValueAt(row, 2);
+        String name = (String) tableModel.getValueAt(row, 0);
+        if (url == null || url.isEmpty()) return;
+        openInTerminalCallback.accept(url, name);
     }
 
-    private String extractUUID(ServiceRecord sr) {
-        DataElement classList = sr.getAttributeValue(0x0001);
-        if (classList == null) return "";
-        if (classList.getDataType() == DataElement.DATSEQ) {
-            StringBuilder sb = new StringBuilder();
-            java.util.Enumeration<?> en = (java.util.Enumeration<?>) classList.getValue();
-            while (en.hasMoreElements()) {
-                Object elem = en.nextElement();
-                if (elem instanceof DataElement de && de.getDataType() == DataElement.UUID) {
-                    if (sb.length() > 0) sb.append(", ");
-                    sb.append(de.getValue().toString());
-                }
-            }
-            return sb.toString();
-        }
-        return "";
-    }
-
-    private String resolveKnownUUID(UUID uuid) {
-        String s = uuid.toString().toUpperCase();
-        // Short UUIDs from the Bluetooth assigned numbers
-        return switch (s) {
-            case "0000000000001101-0000-1000-8000-00805F9B34FB",
-                 "1101"  -> "Serial Port (SPP)";
-            case "1105"  -> "OBEX Object Push";
-            case "1106"  -> "OBEX File Transfer";
-            case "1108"  -> "Headset";
-            case "110A"  -> "Audio Source (A2DP)";
-            case "110B"  -> "Audio Sink (A2DP)";
-            case "110C"  -> "A/V Remote Control Target";
-            case "110E"  -> "A/V Remote Control";
-            case "111E"  -> "Handsfree AG";
-            case "1124"  -> "HID";
-            case "1200"  -> "PnP Information";
-            default -> null;
-        };
-    }
+    // ── Helpers (delegate to SdpHelper) ──────────────────────────────────────
 
     private void setStatus(String text, Color color) {
         SwingUtilities.invokeLater(() -> {
